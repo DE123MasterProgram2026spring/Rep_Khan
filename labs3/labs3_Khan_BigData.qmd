@@ -1,0 +1,117 @@
+---
+title: "Лабораторна робота №3: Робота зі структурованими даними"
+subtitle: "Інженерія даних | КрНУ ім. М. Остроградського"
+author: "Хань Євгеній"
+date: "2026-04-01"
+format: 
+  html:
+    toc: true
+    toc-title: "Table of contents"
+    toc-location: left
+    theme: default
+    code-fold: true
+execute:
+  warning: false
+  message: false
+---
+
+## Мета роботи
+Освоїти сучасні методи обробки неструктурованих та напівструктурованих даних (JSON), навчитися перетворювати формати таблиць (широкий ↔︎ довгий) за допомогою tidyr, а також застосовувати віконні функції.
+
+## Вступ
+У реальному світі інженерії даних вихідні дані часто надходять у нестандартних форматах. Ця лабораторна робота охоплює три критичні аспекти: Робота з JSON, Перетворення форматів та Віконні операції.
+
+## Робоче завдання
+Виконати індивідуальне завдання (Варіант 2).
+Тема - Аналіз даних про веб-трафік та маркетингові кампанії.
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(jsonlite)
+library(readxl)
+library(writexl)
+library(vroom)
+dir.create("data", showWarnings = FALSE)
+
+json_data <- list(
+  list(date = "2024-01-10", page_views = 1500, unique_users = 850, bounce_rate = 0.45, campaigns = list(list(name = "google_ads", channel = "paid_search", cost = 120))),
+  list(date = "2024-01-20", page_views = 1800, unique_users = 1100, bounce_rate = 0.42, campaigns = list(list(name = "email_jan", channel = "email", cost = 50))),
+  list(date = "2024-02-15", page_views = 2200, unique_users = 1400, bounce_rate = 0.50, campaigns = list(list(name = "fb_ads", channel = "social", cost = 200))),
+  list(date = "2024-03-05", page_views = 3000, unique_users = 2100, bounce_rate = 0.38, campaigns = list(list(name = "google_ads_mar", channel = "paid_search", cost = 300), list(name = "spam_test", channel = "none", cost = 0)))
+)
+write_json(json_data, "data/traffic.json", auto_unbox = TRUE)
+
+make_sheet <- function() {
+  tibble(region = c("Kyiv", NA, "Lviv", NA), page = c("/home", "/pricing", "/home", "/about"), sessions = sample(200:800, 4), avg_duration_sec = sample(45:150, 4))
+}
+write_xlsx(list(jan = make_sheet(), feb = make_sheet(), mar = make_sheet()), "data/monthly_reports.xlsx")
+
+tibble(metric = c("total_users", "target_roi"), target_value = c(5000, 0.5)) %>% vroom_write("data/goals.csv", delim = ",")
+raw_json <- read_json("data/traffic.json")
+
+daily_metrics <- tibble(data = raw_json) %>%
+  unnest_wider(data) %>%
+  unnest_longer(campaigns) %>%
+  hoist(campaigns, campaign_name = "name", channel = "channel", cost = "cost") %>%
+  select(-any_of("campaigns")) %>% 
+  filter(cost > 0)
+
+print("Етап 1: Дані з JSON (фрагмент)")
+print(head(daily_metrics, 3))
+sheets <- c("jan" = "2024-01", "feb" = "2024-02", "mar" = "2024-03")
+
+monthly_traffic <- bind_rows(
+  lapply(names(sheets), function(s) {
+    read_excel("data/monthly_reports.xlsx", sheet = s) %>% mutate(month = sheets[[s]])
+  })
+) %>%
+  fill(region, .direction = "down") %>%
+  pivot_longer(cols = c(sessions, avg_duration_sec), names_to = "metric", values_to = "value")
+
+goals <- vroom("data/goals.csv", show_col_types = FALSE)
+
+print("Етап 2: Перетворені щомісячні звіти (фрагмент)")
+print(head(monthly_traffic, 3))
+prepared_daily <- daily_metrics %>%
+  mutate(month = substr(date, 1, 7), conversion = unique_users / page_views)
+
+windowed_data <- prepared_daily %>%
+  arrange(date) %>%
+  group_by(month) %>%
+  mutate(
+    roi = (unique_users * 0.1 - cost) / cost,
+    roi_rank = dense_rank(desc(roi)),
+    bounce_change = bounce_rate - lag(bounce_rate, default = first(bounce_rate)),
+    cum_users = cumsum(unique_users)
+  ) %>%
+  ungroup()
+
+combined_data <- windowed_data %>%
+  left_join(monthly_traffic, by = "month", relationship = "many-to-many")
+
+print("Етап 3: Результати віконних операцій")
+print(windowed_data %>% select(month, roi_rank, bounce_change, cum_users))
+target <- goals %>% filter(metric == "total_users") %>% pull(target_value)
+total_users_achieved <- sum(windowed_data$unique_users)
+print(paste("Ціль користувачів:", target, "| Фактично:", total_users_achieved, "| Досягнуто:", total_users_achieved >= target))
+
+bad_roi_months <- windowed_data %>% filter(roi <= 0) %>% distinct(month)
+all_months <- windowed_data %>% distinct(month)
+good_months <- anti_join(all_months, bad_roi_months, by = "month")
+
+months_all_positive_roi <- windowed_data %>% semi_join(good_months, by = "month") %>% distinct(month)
+print("Місяці з виключно позитивним ROI:")
+print(months_all_positive_roi)
+
+months_with_costs <- windowed_data %>% filter(cost > 0) %>% distinct(month)
+months_cost_but_worse_bounce <- anti_join(months_with_costs, windowed_data %>% filter(bounce_change <= 0) %>% distinct(month), by = "month")
+print("Місяці з витратами та ЗРОСТАННЯМ bounce rate:")
+print(months_cost_but_worse_bounce)
+```
+
+<hr style="border: 1px solid #ddd; margin: 30px 0 10px 0;">
+<footer style="text-align: center; font-size: 0.9em; color: #666; padding: 15px; background: #f9f9f9; border-top: 1px solid #eee; margin-top: 20px;">
+  <p><strong>Виконав: Хань Євгеній</strong> | Викладач: Сидоренко В.М.</p>
+  <p>Кременчуцький національний університет імені Михайла Остроградського © 2026</p>
+</footer>
