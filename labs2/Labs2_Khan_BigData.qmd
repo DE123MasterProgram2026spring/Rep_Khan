@@ -1,0 +1,113 @@
+---
+title: "Лабораторна робота №2: Інтеграція та об’єднання даних з різних джерел"
+subtitle: "Інженерія даних | КрНУ ім. М. Остроградського"
+author: "Хань Євгеній"
+date: "2026-03-16"
+format: 
+  html:
+    toc: true
+    toc-title: "Table of contents"
+    toc-location: left
+    theme: default
+    code-fold: true
+execute:
+  warning: false
+  message: false
+---
+
+## Мета роботи
+Освоїти повний цикл інтеграції реляційних даних у середовищі R: від завантаження даних з різноманітних джерел до їх об’єднання за допомогою вертикальних та горизонтальних операцій. Навчитися будувати реалістичні ETL-конвеєри.
+
+## Вступ
+Дані, потрібні для аналітики, рідко знаходяться в одному джерелі. Ця лабораторна робота моделює типовий ETL-процес (Extract, Transform, Load), де ми витягуємо дані з Excel та CSV, трансформуємо їх через об'єднання (`bind_rows`, `left_join`, `anti_join`) і отримуємо готовий аналітичний датафрейм.
+
+## Робоче завдання
+Виконати індивідуальне завдання (Варіант 2).
+Тема - Аналіз студентських оцінок за два семестри.
+*Примітка: згідно з завданням, датасети генеруються самостійно перед виконанням основної логіки.*
+
+```{r}
+library(dplyr)
+library(readxl)
+library(vroom)
+library(writexl)
+dir.create("data", showWarnings = FALSE)
+students_df <- data.frame(
+  student_id = 1:4,
+  full_name = c("Іванов І.І.", "Петров П.П.", "Сидоренко В.В.", "Коваленко О.О."),
+  group = c("КН-21", "КН-21", "КН-22", "КН-22"),
+  faculty = rep("ФІКС", 4)
+)
+
+scholarships_df <- data.frame(
+  student_id = c(1, 3, 4), 
+  scholarship_type = c("academic", "academic", "social"),
+  amount = c(2000, 2000, 1500)
+)
+write.csv(scholarships_df, "data/scholarships.csv", row.names = FALSE)
+s1_math <- data.frame(student_id = 1:4, exam_score = c(90, 75, 88, 60), project_score = c(95, 80, 90, 70))
+s1_phys <- data.frame(student_id = 1:4, exam_score = c(85, 70, 92, 65), project_score = c(88, 75, 95, 70))
+s1_cs   <- data.frame(student_id = 1:4, exam_score = c(95, 80, 85, 75), project_score = c(100, 85, 90, 80))
+write_xlsx(list(students = students_df, grades_math = s1_math, grades_physics = s1_phys, grades_cs = s1_cs), "data/semester1.xlsx")
+s2_math <- data.frame(student_id = 1:3, exam_score = c(92, 78, 85), project_score = c(96, 82, 88))
+s2_phys <- data.frame(student_id = 1:3, exam_score = c(88, 72, 90), project_score = c(90, 76, 92))
+s2_cs   <- data.frame(student_id = 1:3, exam_score = c(98, 85, 88), project_score = c(100, 88, 92))
+write_xlsx(list(students = students_df, grades_math = s2_math, grades_physics = s2_phys, grades_cs = s2_cs), "data/semester2.xlsx")
+
+students <- read_excel("data/semester1.xlsx", sheet = "students")
+scholarships <- vroom("data/scholarships.csv", show_col_types = FALSE)
+read_grades <- function(file, sheet_name, subj) {
+  read_excel(file, sheet = sheet_name) %>% mutate(subject = subj)
+}
+
+math_s1 <- read_grades("data/semester1.xlsx", "grades_math", "Math")
+phys_s1 <- read_grades("data/semester1.xlsx", "grades_physics", "Physics")
+cs_s1   <- read_grades("data/semester1.xlsx", "grades_cs", "CS")
+
+math_s2 <- read_grades("data/semester2.xlsx", "grades_math", "Math")
+phys_s2 <- read_grades("data/semester2.xlsx", "grades_physics", "Physics")
+cs_s2   <- read_grades("data/semester2.xlsx", "grades_cs", "CS")
+grades_s1 <- bind_rows(math_s1, phys_s1, cs_s1) %>% mutate(semester = "S1")
+grades_s2 <- bind_rows(math_s2, phys_s2, cs_s2) %>% mutate(semester = "S2")
+
+all_grades <- bind_rows(grades_s1, grades_s2)
+
+print("--- Вертикальне об'єднання завершено (фрагмент) ---")
+head(all_grades, 3)
+all_grades_joined <- all_grades %>%
+  left_join(students, by = "student_id") %>%
+  left_join(scholarships, by = "student_id")
+
+print("--- Горизонтальне об'єднання (фрагмент) ---")
+head(all_grades_joined, 3)
+analysis_result <- all_grades_joined %>%
+  mutate(total_score = 0.6 * exam_score + 0.4 * project_score) %>%
+  group_by(group, semester) %>%
+  summarise(
+    mean_total = mean(total_score, na.rm = TRUE),
+    high_achievers = sum(total_score >= 90, na.rm = TRUE),
+    scholarship_prop = mean(!is.na(scholarship_type)),
+    .groups = "drop"
+  )
+
+print("--- Результат аналізу по групах та семестрах ---")
+print(analysis_result)
+scholars_both_sem <- scholarships %>%
+  semi_join(grades_s1, by = "student_id") %>%
+  semi_join(grades_s2, by = "student_id")
+
+print("--- Студенти зі стипендією в обох семестрах ---")
+print(scholars_both_sem)
+lost_scholarship <- scholarships %>%
+  semi_join(grades_s1, by = "student_id") %>%
+  anti_join(grades_s2, by = "student_id")
+
+print("--- Студенти, які втратили стипендію після S1 ---")
+print(lost_scholarship)
+```
+
+<hr style="border: 1px solid #ddd; margin: 30px 0 10px 0;">
+<footer style="text-align: center; font-size: 0.9em; color: #666; padding: 15px; background: #f9f9f9; border-top: 1px solid #eee; margin-top: 20px;">
+  <p><strong>Виконав: Хань Євгеній </strong> | Викладач: Сидоренко В.М.</p>
+  <p>Кременчуцький національний університет імені Михайла Остроградського © 2026</p>
+</footer>
