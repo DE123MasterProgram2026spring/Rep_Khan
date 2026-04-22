@@ -1,0 +1,114 @@
+---
+title: "Лабораторна робота №4: Оптимізація коду в R"
+subtitle: "Інженерія даних | КрНУ ім. М. Остроградського"
+author: "Хань Євгеній"
+date: "2026-04-22"
+format: 
+  html:
+    toc: true
+    toc-title: "Table of contents"
+    toc-location: left
+    theme: default
+    code-fold: true
+execute:
+  warning: false
+  message: false
+---
+
+## Мета роботи
+Освоїти сучасні підходи до оптимізації коду в R, зокрема: заміну імперативних циклів на функціонали, використання векторизованих операцій та застосування конструкцій обробки помилок (`tryCatch`) для стійкості конвеєрів.
+
+##  Аналіз даних про вебсайти з різних джерел
+У цьому розділі реалізовано надійний ETL-конвеєр для обробки та агрегації JSON-файлів. Увесь процес від генерації тестових даних до їх аналізу виконано в єдиному блоці коду з дотриманням функціональної парадигми.
+
+```{r}
+library(dplyr)
+library(purrr)
+library(jsonlite)
+library(tidyr)
+library(tibble)
+
+dir.create("data/website_data", recursive = TRUE, showWarnings = FALSE)
+
+dummy_data <- list(
+  list(site_id = "site_01", month = "2024-03", metrics = list(total_visits = 15200, unique_users = 9800, bounce_rate = 0.42, top_pages = c("home", "products"))),
+  list(site_id = "site_01", month = "2024-04", metrics = list(total_visits = 16000, unique_users = 10000, bounce_rate = 0.40, top_pages = c("home", "about"))),
+  list(site_id = "site_02", month = "2024-03", metrics = list(total_visits = 5000, unique_users = 3000, bounce_rate = 0.60, top_pages = c("blog"))),
+  list(site_id = "site_03", month = "2024-03", metrics = list(total_visits = 20000, unique_users = 15000, bounce_rate = 0.35, top_pages = c("home"))),
+  list(site_id = "site_04", month = "2024-03", metrics = list(total_visits = 8000, unique_users = 4000, bounce_rate = 0.55)),
+  list(site_id = "site_05", month = "2024-03", metrics = list(total_visits = 100, unique_users = 50)),
+  list(site_id = "site_06", month = "2024-03", metrics = list(total_visits = 12000, unique_users = "багато", bounce_rate = 0.45))
+)
+
+for(i in seq_along(dummy_data)) {
+  write_json(dummy_data[[i]], paste0("data/website_data/site_", sprintf("%02d", i), ".json"), auto_unbox = TRUE)
+}
+writeLines("{ broken_json: true, missing_quotes }", "data/website_data/site_corrupted.json")
+
+safe_parse_site <- function(path) {
+  tryCatch({
+    raw_json <- read_json(path)
+    parsed_df <- tibble(data = list(raw_json)) %>%
+      hoist(data,
+            site_id = "site_id",
+            month = "month",
+            total_visits = list("metrics", "total_visits"),
+            unique_users = list("metrics", "unique_users"),
+            bounce_rate = list("metrics", "bounce_rate")
+      ) %>%
+      select(-data)
+    
+    if (any(sapply(parsed_df, is.null)) || any(is.na(parsed_df))) return(NULL)
+    if (!is.numeric(parsed_df$total_visits) || !is.numeric(parsed_df$unique_users) || !is.numeric(parsed_df$bounce_rate)) return(NULL)
+    
+    return(parsed_df)
+  }, error = function(e) return(NULL))
+}
+
+file_paths <- list.files("data/website_data", pattern = "\\.json$", full.names = TRUE)
+sites_data <- bind_rows(Filter(Negate(is.null), lapply(file_paths, safe_parse_site)))
+
+print("--- Початкові дані завантажено ---")
+head(sites_data)
+
+sites_data <- sites_data %>% mutate(engagement_rate = 1 - bounce_rate)
+site_summary <- sites_data %>%
+  group_by(site_id) %>%
+  summarise(
+    avg_users = mean(unique_users, na.rm = TRUE),
+    max_engagement = max(engagement_rate, na.rm = TRUE),
+    months_count = n(),
+    .groups = "drop"
+  )
+
+print("--- Зведена статистика сайтів ---")
+print(site_summary)
+
+count_2_months <- sum(site_summary$months_count >= 2)
+cat("\nСайтів з даними за 2+ місяці:", count_2_months, "\n")
+
+monthly_quality <- sites_data %>%
+  group_by(month) %>%
+  summarise(avg_bounce = mean(bounce_rate, na.rm = TRUE), .groups = "drop")
+
+print("--- Якість даних (Bounce Rate за місяць) ---")
+print(monthly_quality)
+
+numeric_data <- sites_data %>% select(where(is.numeric))
+loop_results <- numeric(ncol(numeric_data))
+names(loop_results) <- names(numeric_data)
+for (i in seq_along(numeric_data)) {
+  loop_results[i] <- mean(numeric_data[[i]], na.rm = TRUE)
+}
+vapply_results <- vapply(numeric_data, mean, numeric(1), na.rm = TRUE)
+
+print("--- Результати порівняння швидкості (for vs vapply) ---")
+print(loop_results)
+print(vapply_results)
+```
+
+<hr style="border: 1px solid #ddd; margin: 30px 0 10px 0;">
+<footer style="text-align: center; font-size: 0.9em; color: #666; padding: 15px; background: #f9f9f9; border-top: 1px solid #eee; margin-top: 20px;">
+  <p><strong>Виконав: Хань Євгеній</strong> | Викладач: Сидоренко В.М.</p>
+  <p>Кременчуцький національний університет імені Михайла Остроградського &copy; 2026</p>
+</footer>
